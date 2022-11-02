@@ -1,5 +1,5 @@
 # app requirements
-cryptography<=3.3.2
+cryptography<38.0.4
 ascii
 regex
 packaging
