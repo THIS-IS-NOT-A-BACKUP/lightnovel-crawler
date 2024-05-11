@@ -7,6 +7,7 @@ from typing import Dict, List
 
 from concurrent.futures import Future
 from slugify import slugify
+import difflib
 
 from ..models import CombinedSearchResult, SearchResult
 from .sources import crawler_list, prepare_crawler
@@ -82,9 +83,9 @@ def search_novels(app):
         if not f or not f.done() or f.cancelled():
             continue
         for item in f.result() or []:
-            if not item:
+            if not (item and item.title):
                 continue
-            key = slugify(item.title)
+            key = slugify(str(item.title))
             if len(key) <= 2:
                 continue
             combined.setdefault(key, [])
@@ -101,5 +102,10 @@ def search_novels(app):
                 novels=value,
             )
         )
-    processed.sort(key=lambda x: -len(x.novels))
+    processed.sort(
+        key=lambda x: (
+            -len(x.novels),
+            -difflib.SequenceMatcher(None, x.title, app.user_input).ratio(),
+        )
+    )
     app.search_results = processed[:MAX_RESULTS]
