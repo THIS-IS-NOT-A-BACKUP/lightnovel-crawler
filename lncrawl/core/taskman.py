@@ -3,7 +3,7 @@ import os
 from abc import ABC
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Semaphore, Thread
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Generator, Iterable, List, Optional
 
 from tqdm import tqdm
 
@@ -11,7 +11,6 @@ from ..utils.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
-MAX_WORKER_COUNT = 7
 MAX_REQUESTS_PER_DOMAIN = 5
 
 _resolver = Semaphore(1)
@@ -21,7 +20,7 @@ _host_semaphores: Dict[str, Semaphore] = {}
 class TaskManager(ABC):
     def __init__(
         self,
-        workers: int = MAX_WORKER_COUNT,
+        workers: Optional[int] = None,
         ratelimit: Optional[float] = None,
     ) -> None:
         """A helper class for task queueing and parallel task execution.
@@ -54,7 +53,7 @@ class TaskManager(ABC):
 
     def init_executor(
         self,
-        workers: int = MAX_WORKER_COUNT,
+        workers: Optional[int] = None,
         ratelimit: Optional[float] = None,
     ):
         """Initializes a new executor.
@@ -102,13 +101,13 @@ class TaskManager(ABC):
 
     def progress_bar(
         self,
-        iterable=None,
-        desc=None,
-        total=None,
-        unit=None,
-        disable=False,
+        iterable: Optional[Iterable] = None,
+        unit: Optional[str] = None,
+        desc: Optional[str] = None,
+        total: Optional[float] = None,
         timeout: Optional[float] = None,
-    ):
+        disable: bool = False,
+    ) -> tqdm:
         if os.getenv("debug_mode"):
             disable = True
 
@@ -120,24 +119,23 @@ class TaskManager(ABC):
 
         bar = tqdm(
             iterable=iterable,
-            desc=desc,
-            unit=unit,
+            desc=desc or '',
+            unit=unit or 'item',
             total=total,
-            disable=disable or os.getenv("debug_mode"),
+            disable=disable,
         )
 
         original_close = bar.close
 
-        def extended_close():
+        def extended_close() -> None:
             if not bar.disable:
                 _resolver.release()
             original_close()
 
-        bar.close = extended_close
-
+        bar.close = extended_close  # type: ignore
         return bar
 
-    def domain_gate(self, hostname: str = ""):
+    def domain_gate(self, hostname: Optional[str]):
         """Limit number of entry per hostname.
 
         Args:
@@ -150,6 +148,8 @@ class TaskManager(ABC):
             with self.domain_gate(url):
                 self.scraper.get(url)
         """
+        if hostname is None:
+            hostname = ''
         if hostname not in _host_semaphores:
             _host_semaphores[hostname] = Semaphore(MAX_REQUESTS_PER_DOMAIN)
         return _host_semaphores[hostname]
@@ -166,15 +166,69 @@ class TaskManager(ABC):
             if not future.done():
                 future.cancel()
 
+    def resolve_as_generator(
+        self,
+        futures: Iterable[Future],
+        timeout: Optional[float] = None,
+        disable_bar: bool = False,
+        desc: Optional[str] = None,
+        unit: Optional[str] = None,
+        fail_fast: bool = False,
+    ) -> Generator[Any, None, None]:
+        """Create a generator output to resolve the futures.
+
+        Args:
+            futures: A iterable list of futures to resolve.
+            timeout: The number of seconds to wait for the result of a future.
+                If None, then there is no limit on the wait time.
+            disable_bar: Hides the progress bar if True.
+            desc: The progress bar description
+            unit: The progress unit name
+            fail_fast: Fail on first error
+        """
+        bar = self.progress_bar(
+            futures,
+            desc=desc,
+            unit=unit,
+            timeout=timeout,
+            disable=disable_bar,
+        )
+        try:
+            for step in bar:
+                future: Future = step
+                if fail_fast:
+                    yield future.result(timeout)
+                    bar.update()
+                    continue
+                try:
+                    yield future.result(timeout)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    yield None
+                    if bar.disable:
+                        logger.exception("Failure to resolve future")
+                    else:
+                        bar.clear()
+                        logger.warning(f"{type(e).__name__}: {e}")
+                finally:
+                    bar.update()
+        except KeyboardInterrupt:
+            raise
+        finally:
+            Thread(target=lambda: self.cancel_futures(futures)).start()
+            yield from ()
+            bar.close()
+
     def resolve_futures(
         self,
         futures: Iterable[Future],
         timeout: Optional[float] = None,
-        disable_bar=False,
-        desc='',
-        unit='item',
-        fail_fast=False,
-    ) -> List[Any]:
+        disable_bar: bool = False,
+        desc: Optional[str] = None,
+        unit: Optional[str] = None,
+        fail_fast: bool = False,
+    ) -> list:
         """Wait for the futures to be done.
 
         Args:
@@ -186,44 +240,14 @@ class TaskManager(ABC):
             unit: The progress unit name
             fail_fast: Fail on first error
         """
-        if not futures:
-            return []
 
-        _futures = list(futures or [])
-        bar = self.progress_bar(
-            desc=desc,
-            unit=unit,
-            total=len(_futures),
-            disable=disable_bar,
-            timeout=timeout,
+        return list(
+            self.resolve_as_generator(
+                futures=futures,
+                timeout=timeout,
+                disable_bar=disable_bar,
+                desc=desc,
+                unit=unit,
+                fail_fast=fail_fast,
+            )
         )
-
-        _results = []
-        try:
-            for future in _futures:
-                if fail_fast:
-                    r = future.result(timeout)
-                    _results.append(r)
-                    bar.update()
-                    continue
-                try:
-                    r = future.result(timeout)
-                    _results.append(r)
-                except KeyboardInterrupt:
-                    break
-                except Exception as e:
-                    _results.append(None)
-                    if bar.disable:
-                        logger.exception("Failure to resolve future")
-                    else:
-                        bar.clear()
-                        logger.warning(f"{type(e).__name__}: {e}")
-                finally:
-                    bar.update()
-        except KeyboardInterrupt:
-            pass
-        finally:
-            Thread(target=lambda: self.cancel_futures(futures)).start()
-            bar.close()
-
-        return _results

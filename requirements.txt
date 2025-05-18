@@ -5,7 +5,7 @@ packaging
 pyease-grpc>=1.6.0
 python-dotenv>=0.15.0,<2.0.0
 beautifulsoup4>=4.8.0,<5.0.0
-requests>=2.20.0,<3.0.0
+requests>=2.20.0,<2.33.0
 python-slugify>=4.0.0,<9.0.0
 colorama>=0.4.0,<0.5.0
 tqdm>=4.60,<5.0
@@ -23,6 +23,7 @@ base58~=2.1.1
 python-box>=6.0.0,<8.0.0
 pycryptodome>=3.0.0,<4.0.0
 selenium>=3.141.0
+tenacity>=9.0.0
 
 # dev requirements
 wheel
@@ -34,6 +35,7 @@ setuptools>=70.0.0
 # cryptography<=3.3.2
 # cssutils>=1.0.0,<2.7.0
 # win_unicode_console~=0.5
+types-tqdm
 
 # bot requirements
 discord.py>=2.0.0
