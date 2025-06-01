@@ -29,12 +29,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install -U pip wheel setuptools
+          python -m pip install -U pip
           pip install -r requirements.txt
 
       - name: Lint with flake8
         run: |
-          pip install flake8
           flake8 -v --count --show-source --statistics
 
       - name: Build wheel
@@ -80,9 +79,38 @@ jobs:
           artifacts: "dist/lncrawl*"
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  build-mac:
+    if: github.repository == 'dipu-bd/lightnovel-crawler'
+    needs: validate
+    name: MacOS Build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Build package
+        run: |
+          sh ./scripts/build.sh
+          mv ./dist/lncrawl ./dist/lncrawl-mac
+
+      - name: Test the executable package
+        run: ./dist/lncrawl-mac --list-sources
+
+      - name: Release
+        uses: ncipollo/release-action@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with: # See available options at https://github.com/ncipollo/release-action
+          allowUpdates: true
+          artifactErrorsFailBuild: true
+          artifacts: "dist/lncrawl-mac"
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   build-linux:
     if: github.repository == 'dipu-bd/lightnovel-crawler'
-    needs: [validate, build-windows]
+    needs: [validate, build-mac, build-windows]
     name: Linux Build & Publish
     runs-on: ubuntu-latest
     steps:
@@ -93,10 +121,12 @@ jobs:
           python-version: "3.10"
 
       - name: Build package
-        run: sh ./scripts/build.sh
+        run: |
+          sh ./scripts/build.sh
+          mv ./dist/lncrawl ./dist/lncrawl-linux
 
       - name: Test the executable package
-        run: ./dist/lncrawl --list-sources
+        run: ./dist/lncrawl-linux --list-sources
 
       - name: Release
         uses: ncipollo/release-action@v1
@@ -104,13 +134,13 @@ jobs:
         with: # See available options at https://github.com/ncipollo/release-action
           allowUpdates: true
           artifactErrorsFailBuild: true
-          artifacts: "dist/lncrawl,dist/*.whl"
+          artifacts: "dist/lncrawl-linux,dist/*.whl"
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update download links
         env:
-          REBRANDLY_API_KEY: ${{ secrets.REBRANDLY_API_KEY }}
-        run: sh ./scripts/rebrandly.sh
+          SHLINK_API_KEY: ${{ secrets.SHLINK_API_KEY }}
+        run: sh ./scripts/bitanon.sh
 
       - name: Publish
         env:
