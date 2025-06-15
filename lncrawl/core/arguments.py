@@ -151,7 +151,12 @@ _builder = Args(
             metavar="PATH",
             help="Path where the downloads to be stored.",
         ),
-        Args("--filename", type=str, metavar="NAME", help="Set the output file name"),
+        Args(
+            "--filename",
+            type=str,
+            metavar="NAME",
+            help="Set the output file name",
+        ),
         Args(
             "--filename-only",
             action="store_true",
@@ -175,7 +180,8 @@ _builder = Args(
         ),
         Args(
             mutex=[
-                Args("--all", action="store_true", help="Download all chapters."),
+                Args("--all", action="store_true",
+                     help="Download all chapters."),
                 Args(
                     "--first",
                     type=int,
@@ -234,7 +240,7 @@ _builder = Args(
             help="Use some free proxies from https://free-proxy-list.net/",
         ),
         Args(
-            "--bot",
+            '-b', "--bot",
             type=str,
             choices=supported_bots,
             help="Select a bot. Default: console.",
@@ -258,6 +264,26 @@ _builder = Args(
             type=str,
             metavar="URL",
             help="Selenium Grid URL for Chrome Webdriver",
+        ),
+        Args(
+            '--host',
+            dest="server_host",
+            type=str,
+            metavar="HOSTNAME",
+            help="Server host name. Default: 0.0.0.0",
+        ),
+        Args(
+            '--port',
+            dest="server_port",
+            type=int,
+            metavar="PORT",
+            help="Server port. Default: 8080",
+        ),
+        Args(
+            '--watch',
+            dest="server_watch",
+            action="store_true",
+            help="Run server in watch mode",
         ),
         Args(
             "--suppress",

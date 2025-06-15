@@ -2,13 +2,14 @@ import base64
 import logging
 import os
 import random
+import re
 import ssl
 from io import BytesIO
 from typing import Any, Callable, Dict, MutableMapping, Optional, Tuple, Union
 from urllib.parse import ParseResult, urlparse
 
 from bs4 import BeautifulSoup
-from cloudscraper import CloudScraper, User_Agent
+from cloudscraper import CloudScraper, User_Agent  # type:ignore
 from PIL import Image, UnidentifiedImageError
 from requests import Response, Session
 from requests.exceptions import ProxyError
@@ -64,10 +65,10 @@ class Scraper(TaskManager, SoupMaker):
         self.init_parser(parser)
         self.init_executor(workers)
 
-    def __del__(self) -> None:
+    def close(self) -> None:
         if hasattr(self, "scraper"):
             self.scraper.close()
-        super().__del__()
+        super().close()
 
     def init_parser(self, parser: Optional[str] = None):
         self._soup_tool = SoupMaker(parser)
@@ -136,7 +137,7 @@ class Scraper(TaskManager, SoupMaker):
                         kwargs["proxies"] = self.__get_proxies(_parsed.scheme, 5)
 
         @retry(
-            stop=stop_after_attempt(max_retries or (self.workers + 3)),
+            stop=stop_after_attempt(max_retries or 2),
             wait=wait_random_exponential(multiplier=0.5, max=60),
             retry=retry_if_exception_type(RetryErrorGroup),
             after=_after_retry,
@@ -190,20 +191,20 @@ class Scraper(TaskManager, SoupMaker):
         """Set a session cookie"""
         self.scraper.cookies.set(name, value)
 
-    def absolute_url(self, url: str, page_url: Optional[str] = None) -> str:
+    def absolute_url(self, url: Any, page_url: Optional[str] = None) -> str:
         url = str(url or "").strip().rstrip("/")
         if not url:
             return url
-        if len(url) >= 1024 or url.startswith("data:"):
+        if url.startswith("data:"):
             return url
         if not page_url:
             page_url = str(self.last_soup_url or self.home_url)
         if url.startswith("//"):
             return self.home_url.split(":")[0] + ":" + url
-        if url.find("//") >= 0:
-            return url
         if url.startswith("/"):
             return self.home_url.strip("/") + url
+        if re.match(r'^https?://.*$', url):
+            return url
         if page_url:
             return page_url.strip("/") + "/" + url
         return self.home_url + url
@@ -314,9 +315,17 @@ class Scraper(TaskManager, SoupMaker):
         headers = CaseInsensitiveDict(headers)
         headers.setdefault("Origin", None)
         headers.setdefault("Referer", None)
+        timeout = kwargs.pop('timeout', None) or (3, 30)
 
         try:
-            response = self.__process_request("get", url, headers=headers, **kwargs)
+            response = self.__process_request(
+                "get",
+                url,
+                headers=headers,
+                timeout=timeout,
+                max_retries=1,
+                **kwargs,
+            )
             content = response.content
             return Image.open(BytesIO(content))
         except UnidentifiedImageError:

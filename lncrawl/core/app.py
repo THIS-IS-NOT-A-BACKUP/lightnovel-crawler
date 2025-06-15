@@ -1,24 +1,26 @@
 import atexit
 import logging
-import shutil
+import os
 from pathlib import Path
-from threading import Thread
+from threading import Event
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from readability import Document
+from readability import Document  # type: ignore
 from slugify import slugify
 
 from .. import constants as C
-from ..binders import available_formats, generate_books
+from ..binders import generate_books
 from ..core.exeptions import LNException
 from ..core.sources import crawler_list, prepare_crawler
 from ..models import Chapter, CombinedSearchResult, OutputFormat
 from .browser import Browser
 from .crawler import Crawler
-from .downloader import fetch_chapter_body, fetch_chapter_images
+from .download_chapters import fetch_chapter_body
+from .download_images import fetch_chapter_images
 from .exeptions import ScraperErrorGroup
-from .novel_info import format_novel, save_metadata
+from .metadata import save_metadata
+from .novel_info import format_novel
 from .novel_search import search_novels
 from .scraper import Scraper
 from .sources import rejected_sources
@@ -30,7 +32,6 @@ class App:
     """Bots are based on top of an instance of this app"""
 
     def __init__(self):
-        self.progress: float = 0
         self.user_input: Optional[str] = None
         self.crawler_links: List[str] = []
         self.crawler: Optional[Crawler] = None
@@ -40,29 +41,65 @@ class App:
         self.pack_by_volume = False
         self.chapters: List[Chapter] = []
         self.book_cover: Optional[str] = None
-        self.output_formats: Dict[str, bool] = {}
-        self.archived_outputs = None
+        self.output_formats: Dict[OutputFormat, bool] = {}
+        self.generated_books: Dict[OutputFormat, List[str]] = {}
+        self.generated_archives: Dict[OutputFormat, str] = {}
+        self.archived_outputs: Optional[List[str]] = None
         self.good_file_name: str = ""
         self.no_suffix_after_filename = False
+        self.search_progress: float = 0
+        self.fetch_novel_progress: float = 0
+        self.fetch_chapter_progress: float = 0
+        self.fetch_images_progress: float = 0
+        self.binding_progress: float = 0
         atexit.register(self.destroy)
 
-    def __background(self, target_method, *args, **kwargs):
-        t = Thread(target=target_method, args=args, kwargs=kwargs)
-        t.start()
-        while t.is_alive():
-            t.join(1)
+    @property
+    def progress(self):
+        if self.search_progress > 0:
+            return self.search_progress
+        info_w = 0.02
+        img_w = 0.08
+        chap_w = 1 - img_w
+        fmt_w = 0.015 * len(self.output_formats)
+        content_w = 1 - fmt_w - info_w
+        if self.crawler and self.crawler.has_manga:
+            img_w = 0.84
+            chap_w = 1 - img_w
+        img_w *= content_w
+        chap_w *= content_w
+        return (
+            self.fetch_novel_progress * 0.02
+            + self.fetch_chapter_progress * chap_w
+            + self.fetch_images_progress * img_w
+            + self.binding_progress * fmt_w
+        )
 
     # ----------------------------------------------------------------------- #
-
-    def initialize(self):
-        logger.info("Initialized App")
 
     def destroy(self):
         atexit.unregister(self.destroy)
         if self.crawler:
-            self.crawler.__del__()
-        self.chapters.clear()
-        logger.info("DONE")
+            self.crawler.close()
+            self.crawler = None
+        self.chapters = []
+        self.login_data = None
+        self.book_cover = None
+        self.search_progress = 0
+        self.fetch_novel_progress = 0
+        self.fetch_chapter_progress = 0
+        self.fetch_images_progress = 0
+        self.binding_progress = 0
+        self.generated_books = {}
+        self.generated_archives = {}
+        self.archived_outputs = None
+        logger.debug("DONE")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        self.destroy()
 
     # ----------------------------------------------------------------------- #
 
@@ -74,7 +111,9 @@ class App:
 
         if self.user_input.startswith("http"):
             logger.info("Detected URL input")
-            self.crawler = prepare_crawler(self.user_input)
+            crawler = prepare_crawler(self.user_input)
+            if not self.crawler or self.crawler.home_url != crawler.home_url:
+                self.crawler = crawler
         else:
             logger.info("Detected query input")
             self.crawler_links = [
@@ -102,7 +141,13 @@ class App:
     def search_novel(self):
         """Requires: user_input, crawler_links"""
         """Produces: search_results"""
-        logger.info("Searching for novels in %d sites...", len(self.crawler_links))
+        logger.info("Searching for novels in %d sites...",
+                    len(self.crawler_links))
+
+        self.fetch_novel_progress = 0
+        self.fetch_chapter_progress = 0
+        self.fetch_images_progress = 0
+        self.binding_progress = 0
 
         search_novels(self)
 
@@ -127,6 +172,8 @@ class App:
     def get_novel_info(self):
         """Requires: crawler, login_data"""
         """Produces: output_path"""
+        self.search_progress = 0
+
         if not isinstance(self.crawler, Crawler):
             raise LNException("No crawler is selected")
 
@@ -134,13 +181,21 @@ class App:
             logger.debug("Login with %s", self.login_data)
             self.crawler.login(*list(self.login_data))
 
-        self.__background(self.crawler.read_novel_info)
-
+        self.fetch_novel_progress = 0
+        self.crawler.read_novel_info()
         format_novel(self.crawler)
+        self.fetch_novel_progress = 100
+
         if not len(self.crawler.chapters):
             raise Exception("No chapters found")
         if not len(self.crawler.volumes):
             raise Exception("No volumes found")
+
+        self.prepare_novel_output_path()
+        save_metadata(self)
+
+    def prepare_novel_output_path(self):
+        assert self.crawler
 
         if not self.good_file_name:
             self.good_file_name = slugify(
@@ -151,36 +206,49 @@ class App:
                 word_boundary=True,
             )
 
-        source_name = slugify(urlparse(self.crawler.home_url).netloc)
+        host = urlparse(self.crawler.novel_url).netloc
+        no_www = host.replace('www.', '')
+        source_name = slugify(no_www)
+
         self.output_path = str(
             Path(C.DEFAULT_OUTPUT_PATH) / source_name / self.good_file_name
         )
+        os.makedirs(self.output_path, exist_ok=True)
 
     # ----------------------------------------------------------------------- #
 
-    def start_download(self):
+    def start_download(self, signal=Event()):
         """Requires: crawler, chapters, output_path"""
-        if not self.output_path or not Path(self.output_path).is_dir():
+        if not self.output_path:
             raise LNException("Output path is not defined")
-
-        assert self.crawler
+        if not Path(self.output_path).is_dir():
+            raise LNException(
+                f"Output path does not exists: ({self.output_path})")
 
         save_metadata(self)
-        fetch_chapter_body(self)
+        if signal.is_set():
+            return  # canceled
+
+        yield from fetch_chapter_body(self, signal)
         save_metadata(self)
-        fetch_chapter_images(self)
+        if signal.is_set():
+            return  # canceled
+
+        yield from fetch_chapter_images(self, signal)
         save_metadata(self, True)
+        if signal.is_set():
+            return  # canceled
 
-        if not self.output_formats.get(OutputFormat.json.value, False):
-            shutil.rmtree(Path(self.output_path) / "json", ignore_errors=True)
-
-        if self.can_do("logout"):
+        if self.crawler and self.can_do("logout"):
             self.crawler.logout()
 
     # ----------------------------------------------------------------------- #
 
-    def bind_books(self):
-        """Requires: crawler, chapters, output_path, pack_by_volume, book_cover, output_formats"""
+    def bind_books(self, signal=Event()):
+        """
+        Requires: crawler, chapters, output_path, pack_by_volume, book_cover,
+        output_formats
+        """
         logger.info("Processing data for binding")
         assert self.crawler
 
@@ -197,53 +265,13 @@ class App:
                     for x in self.chapters
                     if x["volume"] == vol["id"] and len(x["body"]) > 0
                 ]
-
         else:
             first_id = self.chapters[0]["id"]
             last_id = self.chapters[-1]["id"]
-            vol = "c%s-%s" % (first_id, last_id)
-            data[vol] = self.chapters
+            data[f"c{first_id}-{last_id}"] = self.chapters
 
-        generate_books(self, data)
-
-    # ----------------------------------------------------------------------- #
-
-    def compress_books(self, archive_singles=False):
-        logger.info("Compressing output...")
-
-        # Get which paths to be archived with their base names
-        path_to_process = []
-        for fmt in available_formats:
-            root_dir = Path(self.output_path) / fmt
-            if root_dir.is_dir():
-                path_to_process.append(
-                    (root_dir, self.good_file_name + " (" + fmt + ")")
-                )
-
-        # Archive files
-        self.archived_outputs = []
-        for root_dir, output_name in path_to_process:
-            file_list = list(root_dir.glob("*"))
-            if len(file_list) == 0:
-                logger.info("It has no files: %s", root_dir)
-                continue
-
-            if (
-                len(file_list) == 1
-                and not archive_singles
-                and not (root_dir / file_list[0]).is_dir()
-            ):
-                logger.info("Not archiving single file inside %s" % root_dir)
-                archived_file = (root_dir / file_list[0]).as_posix()
-            else:
-                base_path = Path(self.output_path) / output_name
-                logger.info("Compressing %s to %s" % (root_dir, base_path))
-                archived_file = shutil.make_archive(
-                    base_path.as_posix(),
-                    format="zip",
-                    root_dir=root_dir,
-                )
-                logger.info("Compressed: %s", Path(archived_file).name)
-
-            if archived_file:
-                self.archived_outputs.append(archived_file)
+        for fmt in generate_books(self, data):
+            save_metadata(self)
+            if signal.is_set():
+                break
+            yield fmt, self.generated_archives[fmt]

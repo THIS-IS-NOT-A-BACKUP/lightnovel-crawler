@@ -1,0 +1,81 @@
+name: Deployment CI
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🔐 SSH Key & .env setup
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.SSH_SECRET }}" > ~/.ssh/bitanon.pem
+          chmod 600 ~/.ssh/bitanon.pem
+          echo "${{ secrets.ENV_FILE }}" > .env
+
+      # - name: 🐳 Build Docker Image
+      #   run: docker build -t lncrawl .
+
+      - name: 🐳 Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 💾 Docker Cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: 🐳 Build Docker Image with Cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          tags: lncrawl:latest
+          outputs: type=docker,dest=/tmp/lncrawl.tar
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+
+      - name: 📦 Transfer Docker Image
+        run: |
+          bzip2 < /tmp/lncrawl.tar | \
+          ssh -i ~/.ssh/bitanon.pem -o StrictHostKeyChecking=no \
+              "${{ secrets.DEPLOY_SERVER }}" 'bunzip2 | docker load'
+
+      # - name: 📦 Save and Transfer Docker Image
+      #   run: |
+      #     docker save lncrawl | bzip2 | \
+      #     ssh -i ~/.ssh/bitanon.pem -o StrictHostKeyChecking=no \
+      #         "${{ secrets.DEPLOY_SERVER }}" docker load
+
+      - name: 🏗️ Prepare server environment
+        run: |
+          ssh -i ~/.ssh/bitanon.pem -o StrictHostKeyChecking=no \
+              "${{ secrets.DEPLOY_SERVER }}" << 'EOF'
+            mkdir -p ~/lncrawl/output_path
+            cd ~/lncrawl
+            touch .env sqlite.db
+            chown 1000:1000 .env sqlite.db output_path
+          EOF
+
+      - name: 📂 Upload Compose File
+        run: |
+          scp -i ~/.ssh/bitanon.pem -o StrictHostKeyChecking=no \
+              ./scripts/server-compose.yml \
+              "${{ secrets.DEPLOY_SERVER }}:~/lncrawl/compose.yml"
+
+      - name: 🚀 Run Container via Docker Compose
+        run: |
+          ssh -i ~/.ssh/bitanon.pem -o StrictHostKeyChecking=no \
+              "${{ secrets.DEPLOY_SERVER }}" \
+              "docker compose -f ~/lncrawl/compose.yml up -d"

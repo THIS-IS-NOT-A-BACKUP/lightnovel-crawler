@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+from typing import Generator
 
 from ..assets.web import get_css_style, get_js_script
 
@@ -8,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 def get_filename(chapter):
-    if not chapter or "id" not in chapter:
-        return None
+    if not chapter or 'id' not in chapter:
+        return ''
     return str(chapter["id"]).rjust(5, "0") + ".html"
 
 
@@ -27,7 +28,9 @@ def bind_html_chapter(chapters, index, direction="ltr"):
         title = item["title"]
         value = get_filename(item)
         selected = " selected" if idx == index else ""
-        chapter_options.append(f'<option value="{value}"{selected}>{title}</option>')
+        chapter_options.append(
+            f'<option value="{value}"{selected}>{title}</option>'
+        )
 
     button_group = f"""
     <div class="link-group">
@@ -71,13 +74,11 @@ def bind_html_chapter(chapters, index, direction="ltr"):
     return html, this_filename
 
 
-def make_webs(app, data):
-    assert isinstance(data, dict)
+def make_webs(app, data) -> Generator[str, None, None]:
     from ..core.app import App
+    assert isinstance(app, App) and app.crawler
+    assert isinstance(data, dict)
 
-    assert isinstance(app, App)
-
-    web_files = []
     for vol, chapters in data.items():
         assert isinstance(vol, str) and vol in data, "Invalid volume name"
         dir_name = os.path.join(app.output_path, "web", vol)
@@ -100,7 +101,4 @@ def make_webs(app, data):
                 dst_file = os.path.join(img_dir, filename)
                 shutil.copyfile(src_file, dst_file)
 
-            web_files.append(file_name)
-
-    logger.info("Created: %d web files" % len(web_files))
-    return web_files
+            yield file_name

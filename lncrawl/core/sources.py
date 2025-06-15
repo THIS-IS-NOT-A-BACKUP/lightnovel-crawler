@@ -235,13 +235,29 @@ __cache_crawlers: Dict[Path, List[Type[Crawler]]] = {}
 __url_regex = re.compile(r"^^(https?|ftp)://[^\s/$.?#].[^\s]*$", re.I)
 
 
+def __can_do(crawler: Type[Crawler], prop_name: str):
+    if not hasattr(crawler, prop_name):
+        return False
+    if not hasattr(Crawler, prop_name):
+        return True
+    return getattr(crawler, prop_name) != getattr(Crawler, prop_name)
+
+
+def __update_rejected(url: str, reason: str):
+    no_www = url.replace("://www.", "://")
+    url_host = urlparse(url).hostname
+    no_www_host = urlparse(no_www).hostname
+    rejected_sources.setdefault(url, reason)
+    rejected_sources.setdefault(no_www, reason)
+    if url_host:
+        rejected_sources.setdefault(url_host, reason)
+    if no_www_host:
+        rejected_sources.setdefault(no_www_host, reason)
+
+
 def __load_rejected_sources():
     for url, reason in __current_index["rejected"].items():
-        no_www = url.replace("://www.", "://")
-        rejected_sources[url] = reason
-        rejected_sources[no_www] = reason
-        rejected_sources[urlparse(url).hostname] = reason
-        rejected_sources[urlparse(no_www).hostname] = reason
+        __update_rejected(url, reason)
 
 
 def __import_crawlers(file_path: Path, no_cache=False) -> List[Type[Crawler]]:
@@ -294,9 +310,19 @@ def __import_crawlers(file_path: Path, no_cache=False) -> List[Type[Crawler]]:
             if not callable(getattr(crawler, method)):
                 raise LNException(f"Should be callable: {method} @{file_path}")
 
+        if crawler.is_disabled:
+            for url in urls:
+                __update_rejected(
+                    url,
+                    crawler.disable_reason or 'Crawler is disabled'
+                )
+
         setattr(crawler, "base_url", urls)
         setattr(crawler, "language", language_code)
         setattr(crawler, "file_path", str(file_path.absolute()))
+        setattr(crawler, "can_login", __can_do(crawler, 'login'))
+        setattr(crawler, "can_logout", __can_do(crawler, 'logout'))
+        setattr(crawler, "can_search", __can_do(crawler, 'search_novel'))
 
         crawlers.append(crawler)
 
@@ -367,7 +393,9 @@ def load_sources():
 def prepare_crawler(url: str, crawler_file: Optional[str] = None) -> Crawler:
     parsed_url = urlparse(url)
     hostname = parsed_url.hostname
-    if not hostname:
+    no_www = url.replace("://www.", "://")
+    no_www_hostname = urlparse(no_www).hostname
+    if not hostname or not no_www_hostname:
         raise LNException("No crawler defined for empty hostname")
 
     if crawler_file:
@@ -375,10 +403,15 @@ def prepare_crawler(url: str, crawler_file: Optional[str] = None) -> Crawler:
         __load_rejected_sources()
         __add_crawlers_from_path(Path(crawler_file), True)
 
-    if hostname in rejected_sources:
-        raise LNException("Source is rejected. Reason: " + rejected_sources[hostname])
+    if url in rejected_sources:
+        raise LNException("Source is rejected. Reason: " + rejected_sources[url])
 
-    CrawlerType = crawler_list.get(hostname)
+    CrawlerType = (
+        crawler_list.get(url)
+        or crawler_list.get(hostname)
+        or crawler_list.get(no_www)
+        or crawler_list.get(no_www_hostname)
+    )
     if not CrawlerType:
         raise LNException("No crawler found for " + hostname)
 

@@ -4,15 +4,14 @@ from enum import Enum
 class OutputFormat(str, Enum):
     json = "json"
     epub = "epub"
-    text = "text"
     web = "web"
-    docx = "docx"
-    mobi = "mobi"
+    text = "text"
     pdf = "pdf"
+    mobi = "mobi"
+    docx = "docx"
     rtf = "rtf"
-    txt = "txt"
-    azw3 = "azw3"
     fb2 = "fb2"
+    azw3 = "azw3"
     lit = "lit"
     lrf = "lrf"
     oeb = "oeb"
@@ -20,3 +19,6 @@ class OutputFormat(str, Enum):
     rb = "rb"
     snb = "snb"
     tcr = "tcr"
+
+    def __str__(self) -> str:
+        return self.value
