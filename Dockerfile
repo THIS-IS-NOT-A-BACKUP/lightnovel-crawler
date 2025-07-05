@@ -1,7 +1,7 @@
 ##
 # Setup Runner
 ##
-FROM python:3.10-slim-bookworm as runner
+FROM python:3.10-slim-bookworm AS runner
 
 # Install general dependencies
 RUN apt-get update -yq \
@@ -50,7 +50,6 @@ COPY --chown=lncrawl:lncrawl requirements.txt .
 RUN pip install -r requirements.txt
 
 # Copy sources
-COPY .env .env
 COPY sources sources
 COPY lncrawl lncrawl
 

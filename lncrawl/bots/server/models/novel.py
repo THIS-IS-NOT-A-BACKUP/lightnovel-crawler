@@ -2,7 +2,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from pydantic import computed_field, BaseModel
-from sqlmodel import JSON, Column, Field
+from sqlmodel import JSON, Column, Field, Index, func
 
 from ._base import BaseTable
 from .enums import OutputFormat
@@ -23,6 +23,10 @@ class Novel(BaseTable, table=True):
 
     extra: Dict[str, Any] = Field(default={}, sa_column=Column(JSON), description="Extra field")
 
+    __table_args__ = (
+        Index("idx_novel_title_lower", func.lower(title)),
+    )
+
 
 class Artifact(BaseTable, table=True):
     novel_id: str = Field(foreign_key="novel.id", ondelete='CASCADE')
@@ -41,10 +45,19 @@ class Artifact(BaseTable, table=True):
 
     @computed_field  # type:ignore
     @property
-    def file_size(self) -> int:
+    def is_available(self) -> bool:
+        '''Output file is available'''
+        return os.path.isfile(self.output_file)
+
+    @computed_field  # type:ignore
+    @property
+    def file_size(self) -> Optional[int]:
         '''Output file size in bytes'''
-        stat = os.stat(self.output_file)
-        return stat.st_size
+        try:
+            stat = os.stat(self.output_file)
+            return stat.st_size
+        except Exception:
+            return None
 
 
 class NovelChapter(BaseModel):
