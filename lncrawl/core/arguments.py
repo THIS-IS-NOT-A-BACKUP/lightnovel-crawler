@@ -9,11 +9,11 @@ from .display import LINE_SIZE
 
 
 class Args:
-    def __init__(self, *args, mutex: list = [], group: list = [], **kargs):
+    def __init__(self, *args, mutex=None, group=None, **kargs):
         self.args = args
         self.kargs = kargs
-        self.group = group
-        self.mutex = mutex
+        self.group = group or []
+        self.mutex = mutex or []
         self.arguments = None
 
     def build(self, parser=None):
@@ -186,6 +186,7 @@ _builder = Args(
                     "--first",
                     type=int,
                     nargs="?",
+                    const=10,
                     metavar="COUNT",
                     help="Download first few chapters (default: 10).",
                 ),
@@ -193,6 +194,7 @@ _builder = Args(
                     "--last",
                     type=int,
                     nargs="?",
+                    const=10,
                     metavar="COUNT",
                     help="Download last few chapters (default: 10).",
                 ),
