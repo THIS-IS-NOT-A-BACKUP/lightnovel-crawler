@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from threading import Event
 
+from lncrawl.cloudscraper import AbortedException
 from lncrawl.core.app import App
 from lncrawl.core.download_chapters import restore_chapter_body
 from lncrawl.core.metadata import (get_metadata_list, load_metadata,
@@ -15,6 +16,7 @@ from ..models.enums import JobStatus, RunState
 from ..models.job import Job
 from ..models.novel import Artifact, Novel
 from ..models.user import User
+from ..utils.time_utils import current_timestamp
 from .tier import ENABLED_FORMATS, SLOT_TIMEOUT_IN_SECOND
 
 
@@ -80,6 +82,7 @@ def microtask(job_id: str, signal=Event()) -> None:
         app.output_formats = {x: True for x in ENABLED_FORMATS[user.tier]}
         app.output_formats[OutputFormat.json] = True
         app.prepare_search()
+
         crawler = app.crawler
         if not crawler:
             job.error = 'No crawler available for this novel'
@@ -87,11 +90,16 @@ def microtask(job_id: str, signal=Event()) -> None:
             job.run_state = RunState.FAILED
             return save()
 
+        crawler.scraper.signal = signal  # type:ignore
+
         #
         # State: FETCHING_NOVEL
         #
         if job.run_state == RunState.FETCHING_NOVEL:
             logger.info('Fetching novel info')
+
+            if job.started_at and current_timestamp() - job.started_at > 3600 * 1000:
+                raise Exception('Timeout fetching novel info')
 
             app.get_novel_info()
 
@@ -219,12 +227,16 @@ def microtask(job_id: str, signal=Event()) -> None:
                 except Exception as e:
                     logger.error('Failed to email success report', e)
 
+    except AbortedException:
+        pass
+
     except Exception as e:
-        logger.exception('Job failed')
-        job.status = JobStatus.COMPLETED
-        job.run_state = RunState.FAILED
-        job.error = str(e)
-        return save()
+        logger.exception('Job failed', exc_info=True)
+        if not job.error:
+            job.status = JobStatus.COMPLETED
+            job.run_state = RunState.FAILED
+            job.error = str(e)
+            return save()
 
     finally:
         sess.close()

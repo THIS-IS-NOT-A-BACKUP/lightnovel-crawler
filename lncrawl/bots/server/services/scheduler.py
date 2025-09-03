@@ -8,6 +8,7 @@ from sqlmodel import asc, desc, or_, select
 from ..context import ServerContext
 from ..models.job import Job, JobRunnerHistoryItem, JobStatus, RunState
 from ..utils.time_utils import current_timestamp
+from .cleaner import microtask as cleaner_task
 from .runner import microtask
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,8 @@ class JobScheduler:
     def __init__(self, ctx: ServerContext) -> None:
         self.ctx = ctx
         self.db = ctx.db
-        self.last_run_ts = 0
+        self.start_ts: int = 0
+        self.last_cleanup_ts: int = 0
         self.signal: Optional[Event] = None
         self.threads: Dict[str, Thread] = {}
         self.history: Deque[JobRunnerHistoryItem] = deque(maxlen=50)
@@ -37,9 +39,10 @@ class JobScheduler:
         if self.running:
             return
         self.signal = Event()
+        self.start_ts = current_timestamp()
         Thread(
             target=self.run,
-            args=(self.signal,),
+            args=[self.signal],
             daemon=True,
         ).start()
 
@@ -50,22 +53,29 @@ class JobScheduler:
         self.signal = None
 
     def run(self, signal=Event()):
-        logger.info('Scheduler started')
+        logger.info("Scheduler started")
+        pending_restart = False
         try:
             while not signal.is_set():
                 signal.wait(self.ctx.config.app.runner_cooldown)
                 if signal.is_set():
                     return
                 self.__free()
+                self.__add_cleaner(signal)
                 if len(self.threads) < CONCURRENCY:
-                    self.__add(signal)
+                    self.__add_job(signal)
+                if current_timestamp() - self.start_ts > 6 * 3600 * 1000:
+                    pending_restart = True
+                    self.stop()
         except KeyboardInterrupt:
             signal.set()
         finally:
-            logger.info('Scheduler stoppped')
+            logger.info("Scheduler stoppped")
+            if pending_restart:
+                self.start()
 
     def __free(self):
-        logger.debug('Waiting for queue to be free')
+        logger.debug("Waiting for queue to be free")
         # wait for any job to finish
         for k, t in self.threads.items():
             t.join(1)  # wait 1s for this job
@@ -74,8 +84,8 @@ class JobScheduler:
                 del self.threads[k]
                 break
 
-    def __add(self, signal=Event()):
-        logger.debug('Running new task')
+    def __add_job(self, signal=Event()):
+        logger.debug("Running new task")
         with self.db.session() as sess:
             # fetch jobs based on priority
             stmt = select(Job)
@@ -96,7 +106,7 @@ class JobScheduler:
                 if not job.novel_id:
                     job.status = JobStatus.COMPLETED
                     job.run_state = RunState.FAILED
-                    job.error = 'Attached novel is not found'
+                    job.error = "Attached novel is not found"
                     sess.add(job)
                     sess.commit()
                     continue
@@ -105,7 +115,7 @@ class JobScheduler:
                     if job.status != JobStatus.RUNNING:
                         job.status = JobStatus.COMPLETED
                         job.run_state = RunState.CANCELED
-                        job.error = 'Canceled as a duplicate job'
+                        job.error = "Canceled as a duplicate job"
                         sess.add(job)
                         sess.commit()
                     continue
@@ -118,7 +128,7 @@ class JobScheduler:
                 # create and start threads
                 t = Thread(
                     target=microtask,
-                    args=(job.id, signal),
+                    args=[job.id, signal],
                     # daemon=True,
                 )
                 t.start()
@@ -135,3 +145,22 @@ class JobScheduler:
                         run_state=job.run_state,
                     )
                 )
+
+    def __add_cleaner(self, signal=Event()):
+        # skip if another cleaner is already running
+        if "cleaner" in self.threads:
+            return
+
+        # skip if cleaner has run recently
+        timeout = self.ctx.config.app.cleaner_cooldown * 1000
+        if current_timestamp() - self.last_cleanup_ts < timeout:
+            return
+        self.last_cleanup_ts = current_timestamp()
+
+        # create and start threads
+        t = Thread(
+            target=cleaner_task,
+            args=[signal],
+        )
+        t.start()
+        self.threads["cleaner"] = t

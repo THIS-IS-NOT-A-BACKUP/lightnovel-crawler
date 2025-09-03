@@ -9,5 +9,6 @@ logger = logging.getLogger(__name__)
 class AllNovelFullCrawler(NovelFullTemplate):
     base_url = [
         "https://allnovelfull.com/",
-        "https://allnovelfull.net/"
+        "https://allnovelfull.net/",
+        "https://novgo.net/",
     ]
