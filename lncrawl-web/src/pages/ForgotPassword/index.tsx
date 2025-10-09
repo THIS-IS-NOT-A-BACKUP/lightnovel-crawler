@@ -1,7 +1,4 @@
-import { store } from '@/store';
-import { Auth } from '@/store/_auth';
 import { stringifyError } from '@/utils/errors';
-import { LoginOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
@@ -19,17 +16,20 @@ import FormItem from 'antd/es/form/FormItem';
 import axios from 'axios';
 import { useState } from 'react';
 
-export const SignupPage: React.FC<any> = () => {
+export const ForgotPasswordPage: React.FC<any> = () => {
   const [form] = Form.useForm();
   const [error, setError] = useState<string>();
+  const [success, setSuccess] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
 
-  const handleSignup = async (data: any) => {
+  const sendResetLink = async (data: any) => {
+    if (success) return;
     setLoading(true);
+    setSuccess(false);
     setError(undefined);
     try {
-      const result = await axios.post(`/api/auth/signup`, data);
-      store.dispatch(Auth.action.setAuth(result.data));
+      await axios.post(`/api/auth/send-password-reset-link`, data);
+      setSuccess(true);
     } catch (err) {
       setError(stringifyError(err, 'Oops! Something went wrong.'));
     } finally {
@@ -75,49 +75,24 @@ export const SignupPage: React.FC<any> = () => {
           >
             <Form
               form={form}
-              onFinish={handleSignup}
+              onFinish={sendResetLink}
               size="large"
               layout="vertical"
               labelCol={{ style: { padding: 0 } }}
             >
               <Form.Item
-                name="name"
-                label="Full Name"
-                rules={[
-                  { required: true, message: 'Please enter your name' },
-                  { min: 2, message: 'Name must be at least 2 characters' },
-                ]}
-              >
-                <Input placeholder="Enter full name" autoComplete="name" />
-              </Form.Item>
-
-              <Form.Item
                 name="email"
                 label="Email"
-                rules={[
-                  { required: true, message: 'Please enter your email' },
-                  { type: 'email', message: 'Please enter a valid email' },
-                ]}
+                rules={[{ required: true }]}
               >
-                <Input placeholder="Enter email" autoComplete="new-user" />
-              </Form.Item>
-
-              <Form.Item
-                name={'password'}
-                label="Password"
-                rules={[
-                  { required: true, message: 'Please enter a password' },
-                  { min: 6, message: 'Password must be at least 6 characters' },
-                ]}
-                hasFeedback
-              >
-                <Input.Password
-                  placeholder="New password"
-                  autoComplete="new-password"
+                <Input
+                  placeholder="Enter email"
+                  autoComplete="current-user"
+                  disabled={success}
                 />
               </Form.Item>
 
-              {Boolean(error) && (
+              {Boolean(error) ? (
                 <Alert
                   type="warning"
                   showIcon
@@ -125,25 +100,39 @@ export const SignupPage: React.FC<any> = () => {
                   closable
                   onClose={() => setError('')}
                 />
-              )}
-              <FormItem style={{ marginTop: '20px' }}>
-                <Button
-                  block
-                  type="primary"
-                  htmlType="submit"
-                  loading={loading}
-                  disabled={loading}
-                  icon={<LoginOutlined />}
-                  children={'Register'}
+              ) : success ? (
+                <Alert
+                  type="success"
+                  showIcon
+                  message={'Please check your email for a password reset link'}
                 />
-              </FormItem>
+              ) : null}
+
+              {!success ? (
+                <FormItem style={{ marginTop: '20px' }}>
+                  <Button
+                    block
+                    type="primary"
+                    htmlType="submit"
+                    loading={loading}
+                    disabled={loading}
+                    children={'Send Reset Link'}
+                  />
+                </FormItem>
+              ) : (
+                <Flex justify="center" style={{ marginTop: 20 }}>
+                  <Typography.Link href="/forgot-password">
+                    I have not receive any link
+                  </Typography.Link>
+                </Flex>
+              )}
             </Form>
 
             <Divider />
 
             <Flex justify="center">
-              <Typography.Link href="/login">
-                Use existing account
+              <Typography.Link href="/signup">
+                Create new account
               </Typography.Link>
             </Flex>
           </Card>

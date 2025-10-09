@@ -98,6 +98,12 @@ export const LoginPage: React.FC<any> = () => {
                 />
               </Form.Item>
 
+              <Flex justify="end">
+                <Typography.Link href="/forgot-password">
+                  Forgot password?
+                </Typography.Link>
+              </Flex>
+
               {Boolean(error) && (
                 <Alert
                   type="warning"

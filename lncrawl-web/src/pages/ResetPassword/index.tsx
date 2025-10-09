@@ -1,13 +1,9 @@
-import { store } from '@/store';
-import { Auth } from '@/store/_auth';
 import { stringifyError } from '@/utils/errors';
-import { LoginOutlined } from '@ant-design/icons';
 import {
   Alert,
   Avatar,
   Button,
   Card,
-  Divider,
   Flex,
   Form,
   Input,
@@ -17,25 +13,41 @@ import {
 } from 'antd';
 import FormItem from 'antd/es/form/FormItem';
 import axios from 'axios';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 
-export const SignupPage: React.FC<any> = () => {
+export const ResetPasswordPage: React.FC<any> = () => {
+  const navigate = useNavigate();
+  const [search] = useSearchParams();
+
+  const token = useMemo(() => search.get('token'), [search]);
+  const email = useMemo(() => search.get('email'), [search]);
+
   const [form] = Form.useForm();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState<boolean>(false);
 
-  const handleSignup = async (data: any) => {
+  const sendResetLink = async (data: any) => {
+    if (!token) return;
     setLoading(true);
     setError(undefined);
     try {
-      const result = await axios.post(`/api/auth/signup`, data);
-      store.dispatch(Auth.action.setAuth(result.data));
+      await axios.post(`/api/auth/reset-password-with-token`, data, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      navigate('/login');
     } catch (err) {
       setError(stringifyError(err, 'Oops! Something went wrong.'));
     } finally {
       setLoading(false);
     }
   };
+
+  if (!token) {
+    return <Navigate to="/forgot-password" />;
+  }
 
   return (
     <Layout
@@ -75,31 +87,17 @@ export const SignupPage: React.FC<any> = () => {
           >
             <Form
               form={form}
-              onFinish={handleSignup}
+              onFinish={sendResetLink}
               size="large"
               layout="vertical"
               labelCol={{ style: { padding: 0 } }}
             >
-              <Form.Item
-                name="name"
-                label="Full Name"
-                rules={[
-                  { required: true, message: 'Please enter your name' },
-                  { min: 2, message: 'Name must be at least 2 characters' },
-                ]}
-              >
-                <Input placeholder="Enter full name" autoComplete="name" />
-              </Form.Item>
-
-              <Form.Item
-                name="email"
-                label="Email"
-                rules={[
-                  { required: true, message: 'Please enter your email' },
-                  { type: 'email', message: 'Please enter a valid email' },
-                ]}
-              >
-                <Input placeholder="Enter email" autoComplete="new-user" />
+              <Form.Item name="email" label="Email" initialValue={email}>
+                <Input
+                  disabled
+                  autoComplete="email"
+                  placeholder="Enter email"
+                />
               </Form.Item>
 
               <Form.Item
@@ -126,26 +124,17 @@ export const SignupPage: React.FC<any> = () => {
                   onClose={() => setError('')}
                 />
               )}
+
               <FormItem style={{ marginTop: '20px' }}>
                 <Button
                   block
                   type="primary"
                   htmlType="submit"
                   loading={loading}
-                  disabled={loading}
-                  icon={<LoginOutlined />}
-                  children={'Register'}
+                  children={'Reset Password'}
                 />
               </FormItem>
             </Form>
-
-            <Divider />
-
-            <Flex justify="center">
-              <Typography.Link href="/login">
-                Use existing account
-              </Typography.Link>
-            </Flex>
           </Card>
         </Flex>
       </Layout.Content>

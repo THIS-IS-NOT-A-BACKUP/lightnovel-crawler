@@ -1,7 +1,9 @@
-from fastapi import APIRouter, Body, Depends, Security, Form
+from fastapi import APIRouter, Body, Depends, Form, Security
 
 from ..context import ServerContext
-from ..models.user import (CreateRequest, LoginRequest, LoginResponse,
+from ..models.user import (CreateRequest, ForgotPasswordRequest, LoginRequest,
+                           LoginResponse, NameUpdateRequest,
+                           PasswordUpdateRequest, ResetPasswordRequest,
                            SignupRequest, TokenResponse, UpdateRequest, User)
 from ..security import ensure_user
 
@@ -57,19 +59,43 @@ def me(
     return user
 
 
-@router.put('/me/update', summary='Update current user details')
-def self_update(
+@router.put('/me/name', summary='Update current user name')
+def self_name_update(
     ctx: ServerContext = Depends(),
     user: User = Security(ensure_user),
-    body: UpdateRequest = Body(
-        default=...,
-        description='The signup request',
-    ),
+    body: NameUpdateRequest = Body(description='The update request'),
 ) -> bool:
-    body.role = None
-    body.tier = None
-    body.is_active = None
-    return ctx.users.update(user.id, body)
+    request = UpdateRequest(name=body.name)
+    return ctx.users.update(user.id, request)
+
+
+@router.put('/me/password', summary='Update current user password')
+def self_password_update(
+    ctx: ServerContext = Depends(),
+    user: User = Security(ensure_user),
+    body: PasswordUpdateRequest = Body(description='The update request'),
+) -> bool:
+    return ctx.users.change_password(user, body)
+
+
+@router.post('/send-password-reset-link', summary='Send reset password link to email')
+def send_password_reset_link(
+    ctx: ServerContext = Depends(),
+    body: ForgotPasswordRequest = Body(description='The request body'),
+) -> bool:
+    return ctx.users.send_password_reset_link(body.email)
+
+
+@router.post('/reset-password-with-token', summary='Verify token and change password')
+def reset_password_with_token(
+    ctx: ServerContext = Depends(),
+    user: User = Security(ensure_user),
+    body: ResetPasswordRequest = Body(description='The request body'),
+) -> bool:
+    request = UpdateRequest(password=body.password)
+    updated = ctx.users.update(user.id, request)
+    is_verified = ctx.users.set_verified(user.email)
+    return updated and is_verified
 
 
 @router.post('/me/send-otp', summary='Send OTP to current user email for verification')
